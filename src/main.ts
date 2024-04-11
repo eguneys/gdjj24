@@ -1,30 +1,320 @@
 import './style.css'
 
+let set_pointer: (_: boolean) => void
+
+function lerp(v0: number, v1: number, t: number) {
+  return (1 - t) * v0 + t * v1;
+}
+
+function appr(x: number, t: number, by: number) {
+  if (x < t) {
+    return Math.min(t, x + by)
+  } else if (x > t) {
+    return Math.max(t, x - by)
+  } else {
+    return t
+  }
+}
+
+type InteractionHooks = {
+  on_click?: (point: [number, number]) => void
+  on_move?: (point: [number, number]) => void
+  on_down?: (point: [number, number]) => void
+  on_up?: (point: [number, number]) => void
+}
+
+function interaction(el: HTMLElement, hooks: InteractionHooks) {
+
+  let bounds: DOMRect
+
+  const on_resize = () => {
+    bounds = el.getBoundingClientRect()
+  }
+
+  window.addEventListener('resize', on_resize)
+  window.addEventListener('scroll', on_resize)
+  on_resize()
+
+  function event_position(ev: MouseEvent): [number, number] {
+    return [(ev.clientX - bounds.left) / bounds.width,
+    (ev.clientY - bounds.top) / bounds.height]
+  }
+
+  el.addEventListener('click', (ev: Event) => {
+    hooks.on_click?.(event_position(ev as MouseEvent))
+  })
+
+  el.addEventListener('mousemove', (ev: Event) => {
+    hooks.on_move?.(event_position(ev as MouseEvent))
+  })
+
+  el.addEventListener('mousedown', (ev: Event) => {
+    hooks.on_down?.(event_position(ev as MouseEvent))
+  })
+
+  document.addEventListener('mouseup', (ev: Event) => {
+    hooks.on_up?.(event_position(ev as MouseEvent))
+  })
+}
+
+type Drag = {
+  up?: [number, number],
+  down?: [number, number],
+  move?: [number, number]
+}
+
+function drag_drop(): [() => Drag, InteractionHooks] {
+
+  const rescale = (_: [number, number]): [number, number] => [_[0] * 1920, _[1]* 1080]
+  let drag: Drag = {}
+
+  const on_move = (p: [number, number]) => {
+    drag.move = rescale(p)
+  }
+
+  const on_up = (p: [number, number]) => {
+    if (drag.down) {
+      drag.up = rescale(p)
+    }
+  }
+
+  const on_down = (p: [number, number]) => {
+    drag.down = rescale(p)
+  }
+
+  const on_query = () => {
+    let res = {...drag}
+
+    if (drag.up) {
+      drag = {}
+    }
+
+    return res
+  }
+
+  return [on_query, {
+    on_move,
+    on_up,
+    on_down
+  }]
+}
+
+// @ts-ignore
+function rect_point([rx, ry, rw, rh]: [number, number, number, number], [px, py]: [number, number]) {
+  return px >= rx &&
+  px <= rx + rw &&
+  py >= ry &&
+  py <= ry + rh 
+}
+
+
+class CX {
+
+  view: HTMLCanvasElement
+
+  cx: CanvasRenderingContext2D
+
+  constructor() {
+    this.view = document.createElement('canvas')
+
+    this.view.width = 1920
+    this.view.height = 1080
+
+    this.cx = this.view.getContext('2d')!
+
+
+  }
+
+  boxes: Box[] = []
+
+  box(box: Box) {
+    this.boxes.push(box)
+  }
+
+  render() {
+
+    this.cx.clearRect(0, 0, 1920, 1080)
+    this.cx.fillStyle = '#222'
+    this.cx.fillRect(0, 0, 1920, 1080)
+
+    this.cx.fillStyle = '#333'
+    this.cx.shadowBlur = 2;
+	  this.cx.shadowColor = '#111';
+	  this.cx.shadowOffsetX = 4;
+	  this.cx.shadowOffsetY = -4;
+    this.boxes.forEach(box => box.draw(this.cx))
+
+    this.boxes = []
+  }
+
+}
+
+class Box {
+
+  static box = (x: number, y: number) => {
+
+    return new Box(x, y, false)
+  }
+
+  static disk = (x: number, y: number) => {
+
+    return new Box(x, y, true)
+  }
+
+  _hovering: boolean = false
+
+  constructor(public x: number, public y: number, public is_disk: boolean) { this.t_x = x; this.t_y = y; }
+
+  t_x: number
+  t_y: number
+
+  set hover(v: boolean) {
+
+    if (this._hovering !== v) {
+      this._hovering = v
+
+      if (this._hovering) {
+        this._begin_hover()
+      } else {
+        this._end_hover()
+      }
+    }
+  }
+
+
+  private _begin_hover() {
+    set_pointer(true)
+    this.t_r_s = 1
+  }
+
+  private _end_hover() {
+    set_pointer(false)
+    this.t_r_s = 0
+  }
+
+  life = 0
+  r = 0
+  r_s = 0
+  t_r_s = 0
+
+  integrate(_t: number, dt: number) {
+    this.life += dt
+
+    this.x = lerp(this.x, this.t_x, 0.5)
+    this.y = lerp(this.y, this.t_y, 0.5)
+
+    this.r_s = appr(this.r_s, this.t_r_s, dt)
+
+    this.r += this.r_s * dt
+  }
+
+  draw(cx: CanvasRenderingContext2D) {
+    if (this.is_disk) {
+      cx.beginPath()
+      cx.arc(this.x + 50, this.y + 50, 50, 0, Math.PI * 2)
+      cx.fill()
+    } else {
+      cx.save()
+      cx.translate(this.x, this.y)
+      cx.translate(50, 50)
+      cx.rotate(this.r)
+      cx.translate(-50, -50)
+      cx.fillRect(0, 0, 100, 100)
+      cx.restore()
+    }
+  }
+}
+
+
+class Disk {
+  constructor(readonly x: number, readonly y: number) {}
+}
+
+
+class DragBoxDecay {
+  constructor(readonly box: Box, readonly decay: [number, number]) {}
+
+  set move(m: [number, number]) {
+    this.box.t_x = m[0] + this.decay[0]
+    this.box.t_y = m[1] + this.decay[1]
+  }
+}
 
 class GG {
 
   dt!: number
   t!: number
 
-  r = 0
-  r_s =1 
+  boxes: Box[] = [Box.box(200, 200), Box.box(500, 500), Box.disk(100, 100)]
+  dragging_box?: DragBoxDecay
+  dragging_affected?: DragBoxDecay[]
 
-  constructor(readonly gl: GL) {}
+  constructor(readonly cc: CX, readonly dd_update: () => Drag) {}
 
   integrate(t: number, dt: number) {
     this.dt = dt
     this.t = t
 
+    let drag = this.dd_update()
 
-    this.r += this.r_s * dt
+
+    if (!drag.down) {
+      let hover_box = this.boxes.find(box => 
+        drag.move && rect_point([box.x, box.y, 100, 100], drag.move))
+
+        this.boxes.forEach(box => box.hover = box === hover_box)
+    } else {
+      this.boxes.forEach(box => box.hover = false)
+      if (drag.up) {
+
+        this.dragging_box = undefined
+        this.dragging_affected = undefined
+      } else if (drag.move) {
+        if (this.dragging_box) {
+          this.dragging_box.move = drag.move
+
+          this.dragging_affected?.forEach(box => box.move = drag.move)
+        } else {
+          let dragging_box = this.boxes.find(box =>
+            drag.down && rect_point([box.x, box.y, 100, 100], drag.down))
+
+            if (dragging_box) {
+              let drag_decay: [number, number] = [dragging_box.x - drag.down[0], dragging_box.y - drag.down[1]]
+
+              this.boxes = this.boxes.filter(_ => _ !== dragging_box)
+              this.boxes.push(dragging_box)
+
+              this.dragging_box = new DragBoxDecay(dragging_box, drag_decay)
+
+
+              if (dragging_box.is_disk) {
+                let dragging_affected = this.boxes.filter(box => box !== dragging_box &&
+                  rect_point([dragging_box!.x - 150, dragging_box!.y - 150, 300, 300], [box.x, box.y])
+                )
+
+                this.dragging_affected = dragging_affected.map(box => {
+                   let drag_decay: [number, number] = [box.x - drag.down![0], box.y - drag.down![1]]
+                   return new DragBoxDecay(box, drag_decay)
+                })
+              }
+            }
+        }
+      }
+    }
+
+
+
+    this.boxes.forEach(box => box.integrate(t, dt))
   }
 
+  // @ts-ignore
   render(alpha: number) {
-    this.gl.push(new Rect(this.t, 1000, 500, 200, 200, 0, 1, 1))
-    this.gl.push(new Rect(this.t, 1400, 500, 200, 200, 0, 1, 1))
-    this.gl.push(new Rect(this.t, 1400, 700, 800, 200, 0, 1, 1))
-    this.gl.push(new Rect(this.t, 200, 800, 600, 600, 0, 1, 1))
-    this.gl.push(new Rect(this.t, 1500, 800, 600, 600, this.r + this.r_s * this.dt * alpha, 1.3, 1.3))
+
+    this.boxes.forEach(box =>
+      this.cc.box(box)
+    )
+
+    this.cc.render()
   }
 
 }
@@ -136,6 +426,7 @@ class Rect {
 }
 
 
+// @ts-ignore
 class GL {
 
   static NB = 400
@@ -169,7 +460,7 @@ class GL {
     this.gl = this.view.getContext('webgl2', { alpha: true, antialias: true })!
 
     this.gl.viewport(0, 0, 1920, 1080)
-    this.gl.clearColor(0, 0, 0, 1)
+    this.gl.clearColor(0.2, 0.2, 0.2, 1)
     this.gl.enable(this.gl.BLEND)
     this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.DST_ALPHA)
 
@@ -210,24 +501,36 @@ float sdSegment( in vec2 p, in vec2 a, in vec2 b )
 }
 
 void main() {
+  vec2 uv = vUV - 0.5;
 
-  vec2 uv = (vUV * 2.0 - 1.0);
+  vec3 finalColor = vec3(0.0);
 
+  float d = sdSegment(uv, vec2(0.0, -0.5), vec2(0.0, 0.5));
+
+  vec3 col = vec3(0.0, 0.00, 0.0);
+
+  if (d < 0.02) col = vec3(0.2, 0.2, 0.1);
+  if (d < 0.01) col = vec3(1.0, 0.6, 0.0);
+
+  finalColor += col;
+
+  fragColor = vec4(finalColor, 1.0);
+}
+
+void main_bullet() {
+
+  vec2 uv = vUV - 0.5;
   vec2 uv0 = uv;
 
   vec3 finalColor = vec3(0.0);
 
-  for (float i = 0.0; i < 4.0; i++) {
+  float d = sdSegment(uv, vec2(0.0, -0.5), vec2(0.0, 0.5));
 
-    float d = sdSegment(uv, vec2(0.0, -0.4), vec2(0.0, 0.4));
+  d = pow((0.008 + sin(vLife.x * 2.0) * 0.002) / d, 1.2);
 
-    d = pow((0.007 + sin(vLife.x * 2.0) * 0.001) / d, 1.2);
+  vec3 col = vec3(0.1, 0.3, 0.0);
 
-    vec3 col = vec3(0.1, 0.3, 0.0);
-
-    finalColor += col * d;
-
-  }
+  finalColor += col * d;
 
   float a = smoothstep(0.1, 0.2, length(finalColor));
   fragColor = vec4(finalColor, a);
@@ -312,9 +615,17 @@ void main() {
 function app(el: HTMLElement) {
 
 
-  let gl = new GL()
+  //let gl = new GL()
 
-  let gg = new GG(gl)
+  let cx = new CX()
+
+  let [dd_update, dd_hooks] = drag_drop()
+  interaction(el, dd_hooks)
+
+  set_pointer = (v: boolean) => { if (v) { el.classList.add('hover') } else { el.classList.remove('hover') } }
+
+  let gg = new GG(cx, dd_update)
+
 
   gaffer_loop({
     integrate: function (t: number, dt: number): void {
@@ -322,10 +633,9 @@ function app(el: HTMLElement) {
     },
     render: function (alpha: number): void {
       gg.render(alpha)
-      gl.render()
     }
   })
-  el.appendChild(gl.view)
+  el.appendChild(cx.view)
 
 }
 
